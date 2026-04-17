@@ -11,13 +11,30 @@ usage() {
 Usage: orcheas <command> [args]
 
 Commands:
-  init [path]     Scaffold vault + .claude/ + CLAUDE.md (default: current dir)
-  clean <path>    Reset mutable state (active/, .claude/logs/) without touching core/
-  update          Reinstall from source repo
-  help            Show this message
+  init [path]               Scaffold vault + .claude/ + CLAUDE.md
+  workspace [branch]        Create a git worktree for Claude at ../[project]-claude
+  workspace remove          Remove Claude's worktree (keeps branch by default)
+  workspace remove --drop   Remove worktree AND delete the branch
+  clean <vault-path>        Reset mutable state (active/, .claude/logs/)
+  update                    Reinstall from source repo
+  help                      Show this message
 EOF
 }
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+worktree_path() {
+  # Returns the canonical worktree path: ../[project-name]-claude
+  local PROJECT_NAME
+  PROJECT_NAME="$(basename "$(pwd)")"
+  echo "$(dirname "$(pwd)")/${PROJECT_NAME}-claude"
+}
+
+current_claude_branch() {
+  # Returns the most recent claude/* branch, or empty string
+  git branch --list "claude/*" --sort=-creatordate | head -1 | sed 's/^[* ]*//'
+}
+
+# ── init ─────────────────────────────────────────────────────────────────────
 cmd_init() {
   local TARGET="${1:-.}"
   mkdir -p "$TARGET"
@@ -27,8 +44,10 @@ cmd_init() {
   echo "🤖  orcheas init → $TARGET"
   echo "──────────────────────────────────────────────────────────"
 
-  # ── vault structure ─────────────────────────────────────────────────────────
   for dir in vault/core vault/active vault/memories; do
+    mkdir -p "$TARGET/$dir"
+  done
+  for dir in .claude/commands .claude/agents .claude/hooks .claude/logs; do
     mkdir -p "$TARGET/$dir"
   done
 
@@ -42,17 +61,11 @@ cmd_init() {
     fi
   }
 
-  copy_if_missing "$TEMPLATES/vault/core/goal.md"      "$TARGET/vault/core/goal.md"
-  copy_if_missing "$TEMPLATES/vault/core/rules.md"     "$TARGET/vault/core/rules.md"
-  copy_if_missing "$TEMPLATES/vault/core/routine.md"   "$TARGET/vault/core/routine.md"
-  copy_if_missing "$TEMPLATES/vault/active/summary.md" "$TARGET/vault/active/summary.md"
-  copy_if_missing "$TEMPLATES/vault/memories/log.md"   "$TARGET/vault/memories/log.md"
-
-  # ── .claude structure ────────────────────────────────────────────────────────
-  for dir in .claude/commands .claude/agents .claude/hooks .claude/logs; do
-    mkdir -p "$TARGET/$dir"
-  done
-
+  copy_if_missing "$TEMPLATES/vault/core/goal.md"                "$TARGET/vault/core/goal.md"
+  copy_if_missing "$TEMPLATES/vault/core/rules.md"               "$TARGET/vault/core/rules.md"
+  copy_if_missing "$TEMPLATES/vault/core/routine.md"             "$TARGET/vault/core/routine.md"
+  copy_if_missing "$TEMPLATES/vault/active/summary.md"           "$TARGET/vault/active/summary.md"
+  copy_if_missing "$TEMPLATES/vault/memories/log.md"             "$TARGET/vault/memories/log.md"
   copy_if_missing "$TEMPLATES/claude/settings.json"              "$TARGET/.claude/settings.json"
   copy_if_missing "$TEMPLATES/claude/.gitignore"                 "$TARGET/.claude/.gitignore"
   copy_if_missing "$TEMPLATES/claude/commands/task.md"           "$TARGET/.claude/commands/task.md"
@@ -64,47 +77,135 @@ cmd_init() {
   copy_if_missing "$TEMPLATES/claude/hooks/session-stop.sh"      "$TARGET/.claude/hooks/session-stop.sh"
   copy_if_missing "$TEMPLATES/claude/hooks/protect-files.sh"     "$TARGET/.claude/hooks/protect-files.sh"
   copy_if_missing "$TEMPLATES/claude/hooks/verify-branch.sh"     "$TARGET/.claude/hooks/verify-branch.sh"
+  copy_if_missing "$TEMPLATES/TODO.md"                           "$TARGET/TODO.md"
 
   chmod +x "$TARGET/.claude/hooks/"*.sh
 
-  # ── root files ──────────────────────────────────────────────────────────────
-  copy_if_missing "$TEMPLATES/TODO.md" "$TARGET/TODO.md"
-
-  # CLAUDE.md always overwrites (it's the protocol, not user content)
   cp "$CLAUDE_MD_SRC" "$TARGET/CLAUDE.md"
   echo "  ✅  $TARGET/CLAUDE.md (always refreshed)"
 
-  # ── .gitignore additions ────────────────────────────────────────────────────
   local GI="$TARGET/.gitignore"
-  if [[ ! -f "$GI" ]]; then touch "$GI"; fi
+  [[ ! -f "$GI" ]] && touch "$GI"
   if ! grep -q ".claude/settings.local.json" "$GI"; then
     printf '\n# Claude Code local settings\n.claude/settings.local.json\n' >> "$GI"
-    echo "  ✅  .gitignore updated"
   fi
 
   echo ""
-  echo "🎉  Done! Structure:"
-  echo "    $TARGET/"
-  echo "    ├── CLAUDE.md              ← agent rules & workflow (auto-refreshed)"
-  echo "    ├── TODO.md                ← shared task list"
-  echo "    ├── vault/"
-  echo "    │   ├── core/              ← EDIT: goal.md, rules.md, routine.md"
-  echo "    │   ├── active/summary.md  ← agent-maintained state"
-  echo "    │   └── memories/log.md    ← agent append-only notes"
-  echo "    └── .claude/"
-  echo "        ├── settings.json      ← hooks (branch guard, file protect)"
-  echo "        ├── commands/          ← /task  /done  /log  /review"
-  echo "        ├── agents/            ← code-reviewer persona"
-  echo "        ├── hooks/             ← session context, branch guard"
-  echo "        └── logs/              ← per-feature decision logs (Claude writes here)"
-  echo ""
-  echo "  Next steps:"
-  echo "  1. Edit vault/core/goal.md   — describe your project"
-  echo "  2. Edit vault/core/rules.md  — add your hard constraints"
-  echo "  3. Fill TODO.md              — add your first tasks"
-  echo "  4. Open Claude Code in VSCode and type /task"
+  echo "🎉  Done! Next steps:"
+  echo "  1. Edit vault/core/goal.md and vault/core/rules.md"
+  echo "  2. Add tasks to TODO.md"
+  echo "  3. Run: orcheas workspace   ← creates Claude's isolated worktree"
+  echo "  4. Open the worktree folder in VSCode and launch Claude Code"
 }
 
+# ── workspace ─────────────────────────────────────────────────────────────────
+cmd_workspace() {
+  local SUBCOMMAND="${1:-}"
+
+  # ── workspace remove ────────────────────────────────────────────────────────
+  if [[ "$SUBCOMMAND" == "remove" ]]; then
+    local DROP_BRANCH=false
+    [[ "${2:-}" == "--drop" ]] && DROP_BRANCH=true
+
+    local WT_PATH
+    WT_PATH="$(worktree_path)"
+
+    if [[ ! -d "$WT_PATH" ]]; then
+      echo "❌  Worktree not found at $WT_PATH"
+      exit 1
+    fi
+
+    # Identify the branch the worktree is on
+    local WT_BRANCH
+    WT_BRANCH="$(git -C "$WT_PATH" branch --show-current 2>/dev/null || echo "")"
+
+    echo "🗑   Removing worktree: $WT_PATH"
+    git worktree remove "$WT_PATH" --force
+    echo "  ✅  Worktree removed"
+
+    if $DROP_BRANCH && [[ -n "$WT_BRANCH" ]] && [[ "$WT_BRANCH" == claude/* ]]; then
+      git branch -d "$WT_BRANCH" 2>/dev/null || git branch -D "$WT_BRANCH"
+      echo "  ✅  Branch '$WT_BRANCH' deleted"
+    else
+      echo "  ℹ️   Branch '${WT_BRANCH:-unknown}' kept — merge or delete it manually"
+    fi
+    return
+  fi
+
+  # ── workspace create ────────────────────────────────────────────────────────
+  local WT_PATH
+  WT_PATH="$(worktree_path)"
+
+  if [[ -d "$WT_PATH" ]]; then
+    echo "⚠️   Worktree already exists at $WT_PATH"
+    echo "     Open it in VSCode or run: orcheas workspace remove"
+    exit 0
+  fi
+
+  # Determine which branch to use
+  local BRANCH="${SUBCOMMAND:-}"
+
+  if [[ -z "$BRANCH" ]]; then
+    # Try to reuse the most recent claude/* branch, else prompt
+    local EXISTING
+    EXISTING="$(current_claude_branch)"
+    if [[ -n "$EXISTING" ]]; then
+      BRANCH="$EXISTING"
+      echo "  ℹ️   Reusing existing branch: $BRANCH"
+    else
+      echo "  ℹ️   No claude/* branch found. Creating a placeholder branch."
+      echo "      (Use /task inside the worktree to create a proper task branch)"
+      BRANCH="claude/workspace"
+    fi
+  fi
+
+  # Normalise: add claude/ prefix if missing
+  if [[ "$BRANCH" != claude/* ]]; then
+    BRANCH="claude/$BRANCH"
+  fi
+
+  echo ""
+  echo "🌿  Creating Claude worktree"
+  echo "    Path  : $WT_PATH"
+  echo "    Branch: $BRANCH"
+  echo ""
+
+  # Create branch if it doesn't exist
+  if ! git show-ref --verify --quiet "refs/heads/$BRANCH" 2>/dev/null; then
+    git branch "$BRANCH" main 2>/dev/null || git branch "$BRANCH" HEAD
+    echo "  ✅  Branch '$BRANCH' created from main"
+  fi
+
+  git worktree add "$WT_PATH" "$BRANCH"
+  echo "  ✅  Worktree created"
+
+  # Copy .claude/ into the worktree if it exists in the main tree
+  # (worktrees share .git but NOT the working files)
+  if [[ -d ".claude" ]] && [[ ! -d "$WT_PATH/.claude" ]]; then
+    cp -r ".claude" "$WT_PATH/.claude"
+    echo "  ✅  .claude/ copied into worktree"
+  fi
+
+  echo ""
+  echo "──────────────────────────────────────────────────────────"
+  echo "🎉  Worktree ready!"
+  echo ""
+  echo "  Your directory : $(pwd)           (your code, your branch)"
+  echo "  Claude's dir   : $WT_PATH   (Claude works here only)"
+  echo ""
+  echo "  Open Claude's workspace in VSCode:"
+  echo "    code $WT_PATH"
+  echo ""
+  echo "  Inside Claude Code, start a task with /task"
+  echo "  When Claude proposes a merge, review with:"
+  echo "    git diff main...$BRANCH"
+  echo "    git merge $BRANCH   (after approval)"
+  echo ""
+  echo "  To tear down after merging:"
+  echo "    orcheas workspace remove"
+}
+
+# ── clean ─────────────────────────────────────────────────────────────────────
 cmd_clean() {
   local VAULT="${1:-}"
   if [[ -z "$VAULT" ]]; then echo "Usage: orcheas clean <vault-path>"; exit 1; fi
@@ -113,27 +214,25 @@ cmd_clean() {
   VAULT="$(cd "$VAULT" && pwd)"
   PROJECT_ROOT="$(dirname "$VAULT")"
 
-  echo "🧹  Cleaning mutable state in $VAULT and $PROJECT_ROOT/.claude/logs/"
+  echo "🧹  Cleaning mutable state in $VAULT"
 
-  # Reset vault/active/
   cp "$TEMPLATES/vault/active/summary.md" "$VAULT/active/summary.md"
   echo "  ✅  vault/active/summary.md reset"
 
-  # Reset vault/memories/
   find "$VAULT/memories/" -name "*.md" -delete
   cp "$TEMPLATES/vault/memories/log.md" "$VAULT/memories/log.md"
   echo "  ✅  vault/memories/ reset"
 
-  # Reset .claude/logs/
   if [[ -d "$PROJECT_ROOT/.claude/logs" ]]; then
     find "$PROJECT_ROOT/.claude/logs/" -name "*.md" -delete
     echo "  ✅  .claude/logs/ cleared"
   fi
 
-  echo "  Core files untouched: vault/core/"
-  echo "  Task list untouched : TODO.md"
+  echo "  Core files untouched : vault/core/"
+  echo "  Task list untouched  : TODO.md"
 }
 
+# ── update ────────────────────────────────────────────────────────────────────
 cmd_update() {
   local SOURCE_FILE="$SELF_DIR/.source"
   local SOURCE_DIR="${ORCHEAS_SOURCE:-}"
@@ -151,10 +250,28 @@ cmd_update() {
   bash "$SOURCE_DIR/install.sh"
 }
 
+# ── dispatch ──────────────────────────────────────────────────────────────────
 case "${1:-help}" in
-  init)    cmd_init   "${2:-}" ;;
-  clean)   cmd_clean  "${2:-}" ;;
-  update)  cmd_update ;;
-  help|--help|-h) usage ;;
-  *) echo "Unknown command: $1"; usage; exit 1 ;;
+  init)
+    cmd_init "${2:-}"
+    ;;
+  workspace)
+    # Handle: orcheas workspace | orcheas workspace <branch> | orcheas workspace remove [--drop]
+    shift
+    cmd_workspace "${@:-}"
+    ;;
+  clean)
+    cmd_clean "${2:-}"
+    ;;
+  update)
+    cmd_update
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $1"
+    usage
+    exit 1
+    ;;
 esac

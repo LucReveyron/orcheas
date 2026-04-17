@@ -1,118 +1,26 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  apply-overwrite.sh
-#  Run this from the root of your local orcheas clone.
-#  It rewrites all files with the new Claude Code workflow.
+#  apply-worktree-update.sh
+#  Applies on top of apply-overwrite.sh.
+#  Adds git worktree support to orcheas.
 #
-#  Usage:
-#    cd /path/to/orcheas
-#    bash apply-overwrite.sh
+#  Run from the root of your orcheas clone:
+#    bash apply-worktree-update.sh
 # =============================================================================
 
 set -euo pipefail
 
-# Safety check — make sure we're in the right repo
-if [[ ! -f "install.sh" ]] || [[ ! -d "templates" ]]; then
-  echo "❌  Run this from the root of your orcheas repo (install.sh and templates/ must exist)."
+if [[ ! -f "orcheas" ]] || [[ ! -d "templates/claude" ]]; then
+  echo "❌  Run from the root of your orcheas repo (after apply-overwrite.sh)."
   exit 1
 fi
 
 echo ""
-echo "🔄  Overwriting orcheas with new Claude Code workflow..."
+echo "🌿  Adding worktree support to orcheas..."
 echo "──────────────────────────────────────────────────────────"
 
-# ── Create new directory structure ───────────────────────────────────────────
-mkdir -p \
-  templates/vault/core \
-  templates/vault/active \
-  templates/vault/memories \
-  templates/claude/commands \
-  templates/claude/agents \
-  templates/claude/hooks \
-  templates/claude/logs \
-  tests
-
-echo "✅  Directories ready"
-
 # =============================================================================
-#  install.sh  (updated — now also copies .claude/ template)
-# =============================================================================
-cat > install.sh <<'INSTALL'
-#!/usr/bin/env bash
-# install.sh — Installs orcheas globally. Does NOT touch ~/.claude.
-#
-# What it does:
-#   1. Copies orcheas to ~/.local/share/orcheas
-#   2. Adds an `orcheas` shell function to your shell rc file
-#
-# Usage: ./install.sh [--dry-run]
-
-set -euo pipefail
-
-INSTALL_DIR="$HOME/.local/share/orcheas"
-DRY_RUN=false
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
-
-if [[ -f "$HOME/.zshrc" ]]; then RC_FILE="$HOME/.zshrc"
-elif [[ -f "$HOME/.bashrc" ]]; then RC_FILE="$HOME/.bashrc"
-else RC_FILE="$HOME/.profile"
-fi
-
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-log() { echo "  $*"; }
-run() { if $DRY_RUN; then echo "  [dry-run] $*"; else eval "$*"; fi; }
-
-[[ -d "$INSTALL_DIR" ]] && MODE="update" || MODE="install"
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  orcheas $MODE"
-$DRY_RUN && echo "  (dry-run mode — no changes will be made)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-echo ""
-echo "▶  Installing to $INSTALL_DIR"
-run "mkdir -p '$INSTALL_DIR'"
-run "cp -r '$SOURCE_DIR/templates' '$INSTALL_DIR/'"
-run "cp '$SOURCE_DIR/orcheas'      '$INSTALL_DIR/'"
-run "cp '$SOURCE_DIR/CLAUDE.md'    '$INSTALL_DIR/'"
-run "chmod +x '$INSTALL_DIR/orcheas'"
-run "echo '$SOURCE_DIR' > '$INSTALL_DIR/.source'"
-log "done"
-
-echo ""
-echo "▶  Adding shell function to $RC_FILE"
-MARKER="# orcheas — Claude Code scaffolding"
-SHELL_BLOCK="
-$MARKER
-orcheas() { bash \"\$HOME/.local/share/orcheas/orcheas\" \"\$@\"; }
-"
-if grep -qF "$MARKER" "$RC_FILE" 2>/dev/null; then
-  log "already present in $RC_FILE — skipping"
-else
-  run "printf '%s\n' '$SHELL_BLOCK' >> '$RC_FILE'"
-  log "done"
-fi
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  ✓ $MODE complete."
-echo ""
-if [[ "$MODE" == "install" ]]; then
-  echo "  source $RC_FILE"
-  echo ""
-  echo "  Then in any project:"
-fi
-echo "  orcheas init [path]     scaffold vault + .claude + CLAUDE.md"
-echo "  orcheas clean <vault>   reset active/ and .claude/logs/"
-echo "  orcheas update          pull latest from source repo"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-INSTALL
-chmod +x install.sh
-echo "✅  install.sh"
-
-# =============================================================================
-#  orcheas  (updated CLI — new scaffold logic)
+#  orcheas CLI  — replace entirely with worktree-aware version
 # =============================================================================
 cat > orcheas <<'ORCHEAS'
 #!/usr/bin/env bash
@@ -128,13 +36,30 @@ usage() {
 Usage: orcheas <command> [args]
 
 Commands:
-  init [path]     Scaffold vault + .claude/ + CLAUDE.md (default: current dir)
-  clean <path>    Reset mutable state (active/, .claude/logs/) without touching core/
-  update          Reinstall from source repo
-  help            Show this message
+  init [path]               Scaffold vault + .claude/ + CLAUDE.md
+  workspace [branch]        Create a git worktree for Claude at ../[project]-claude
+  workspace remove          Remove Claude's worktree (keeps branch by default)
+  workspace remove --drop   Remove worktree AND delete the branch
+  clean <vault-path>        Reset mutable state (active/, .claude/logs/)
+  update                    Reinstall from source repo
+  help                      Show this message
 EOF
 }
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+worktree_path() {
+  # Returns the canonical worktree path: ../[project-name]-claude
+  local PROJECT_NAME
+  PROJECT_NAME="$(basename "$(pwd)")"
+  echo "$(dirname "$(pwd)")/${PROJECT_NAME}-claude"
+}
+
+current_claude_branch() {
+  # Returns the most recent claude/* branch, or empty string
+  git branch --list "claude/*" --sort=-creatordate | head -1 | sed 's/^[* ]*//'
+}
+
+# ── init ─────────────────────────────────────────────────────────────────────
 cmd_init() {
   local TARGET="${1:-.}"
   mkdir -p "$TARGET"
@@ -144,8 +69,10 @@ cmd_init() {
   echo "🤖  orcheas init → $TARGET"
   echo "──────────────────────────────────────────────────────────"
 
-  # ── vault structure ─────────────────────────────────────────────────────────
   for dir in vault/core vault/active vault/memories; do
+    mkdir -p "$TARGET/$dir"
+  done
+  for dir in .claude/commands .claude/agents .claude/hooks .claude/logs; do
     mkdir -p "$TARGET/$dir"
   done
 
@@ -159,17 +86,11 @@ cmd_init() {
     fi
   }
 
-  copy_if_missing "$TEMPLATES/vault/core/goal.md"      "$TARGET/vault/core/goal.md"
-  copy_if_missing "$TEMPLATES/vault/core/rules.md"     "$TARGET/vault/core/rules.md"
-  copy_if_missing "$TEMPLATES/vault/core/routine.md"   "$TARGET/vault/core/routine.md"
-  copy_if_missing "$TEMPLATES/vault/active/summary.md" "$TARGET/vault/active/summary.md"
-  copy_if_missing "$TEMPLATES/vault/memories/log.md"   "$TARGET/vault/memories/log.md"
-
-  # ── .claude structure ────────────────────────────────────────────────────────
-  for dir in .claude/commands .claude/agents .claude/hooks .claude/logs; do
-    mkdir -p "$TARGET/$dir"
-  done
-
+  copy_if_missing "$TEMPLATES/vault/core/goal.md"                "$TARGET/vault/core/goal.md"
+  copy_if_missing "$TEMPLATES/vault/core/rules.md"               "$TARGET/vault/core/rules.md"
+  copy_if_missing "$TEMPLATES/vault/core/routine.md"             "$TARGET/vault/core/routine.md"
+  copy_if_missing "$TEMPLATES/vault/active/summary.md"           "$TARGET/vault/active/summary.md"
+  copy_if_missing "$TEMPLATES/vault/memories/log.md"             "$TARGET/vault/memories/log.md"
   copy_if_missing "$TEMPLATES/claude/settings.json"              "$TARGET/.claude/settings.json"
   copy_if_missing "$TEMPLATES/claude/.gitignore"                 "$TARGET/.claude/.gitignore"
   copy_if_missing "$TEMPLATES/claude/commands/task.md"           "$TARGET/.claude/commands/task.md"
@@ -181,47 +102,135 @@ cmd_init() {
   copy_if_missing "$TEMPLATES/claude/hooks/session-stop.sh"      "$TARGET/.claude/hooks/session-stop.sh"
   copy_if_missing "$TEMPLATES/claude/hooks/protect-files.sh"     "$TARGET/.claude/hooks/protect-files.sh"
   copy_if_missing "$TEMPLATES/claude/hooks/verify-branch.sh"     "$TARGET/.claude/hooks/verify-branch.sh"
+  copy_if_missing "$TEMPLATES/TODO.md"                           "$TARGET/TODO.md"
 
   chmod +x "$TARGET/.claude/hooks/"*.sh
 
-  # ── root files ──────────────────────────────────────────────────────────────
-  copy_if_missing "$TEMPLATES/TODO.md" "$TARGET/TODO.md"
-
-  # CLAUDE.md always overwrites (it's the protocol, not user content)
   cp "$CLAUDE_MD_SRC" "$TARGET/CLAUDE.md"
   echo "  ✅  $TARGET/CLAUDE.md (always refreshed)"
 
-  # ── .gitignore additions ────────────────────────────────────────────────────
   local GI="$TARGET/.gitignore"
-  if [[ ! -f "$GI" ]]; then touch "$GI"; fi
+  [[ ! -f "$GI" ]] && touch "$GI"
   if ! grep -q ".claude/settings.local.json" "$GI"; then
     printf '\n# Claude Code local settings\n.claude/settings.local.json\n' >> "$GI"
-    echo "  ✅  .gitignore updated"
   fi
 
   echo ""
-  echo "🎉  Done! Structure:"
-  echo "    $TARGET/"
-  echo "    ├── CLAUDE.md              ← agent rules & workflow (auto-refreshed)"
-  echo "    ├── TODO.md                ← shared task list"
-  echo "    ├── vault/"
-  echo "    │   ├── core/              ← EDIT: goal.md, rules.md, routine.md"
-  echo "    │   ├── active/summary.md  ← agent-maintained state"
-  echo "    │   └── memories/log.md    ← agent append-only notes"
-  echo "    └── .claude/"
-  echo "        ├── settings.json      ← hooks (branch guard, file protect)"
-  echo "        ├── commands/          ← /task  /done  /log  /review"
-  echo "        ├── agents/            ← code-reviewer persona"
-  echo "        ├── hooks/             ← session context, branch guard"
-  echo "        └── logs/              ← per-feature decision logs (Claude writes here)"
-  echo ""
-  echo "  Next steps:"
-  echo "  1. Edit vault/core/goal.md   — describe your project"
-  echo "  2. Edit vault/core/rules.md  — add your hard constraints"
-  echo "  3. Fill TODO.md              — add your first tasks"
-  echo "  4. Open Claude Code in VSCode and type /task"
+  echo "🎉  Done! Next steps:"
+  echo "  1. Edit vault/core/goal.md and vault/core/rules.md"
+  echo "  2. Add tasks to TODO.md"
+  echo "  3. Run: orcheas workspace   ← creates Claude's isolated worktree"
+  echo "  4. Open the worktree folder in VSCode and launch Claude Code"
 }
 
+# ── workspace ─────────────────────────────────────────────────────────────────
+cmd_workspace() {
+  local SUBCOMMAND="${1:-}"
+
+  # ── workspace remove ────────────────────────────────────────────────────────
+  if [[ "$SUBCOMMAND" == "remove" ]]; then
+    local DROP_BRANCH=false
+    [[ "${2:-}" == "--drop" ]] && DROP_BRANCH=true
+
+    local WT_PATH
+    WT_PATH="$(worktree_path)"
+
+    if [[ ! -d "$WT_PATH" ]]; then
+      echo "❌  Worktree not found at $WT_PATH"
+      exit 1
+    fi
+
+    # Identify the branch the worktree is on
+    local WT_BRANCH
+    WT_BRANCH="$(git -C "$WT_PATH" branch --show-current 2>/dev/null || echo "")"
+
+    echo "🗑   Removing worktree: $WT_PATH"
+    git worktree remove "$WT_PATH" --force
+    echo "  ✅  Worktree removed"
+
+    if $DROP_BRANCH && [[ -n "$WT_BRANCH" ]] && [[ "$WT_BRANCH" == claude/* ]]; then
+      git branch -d "$WT_BRANCH" 2>/dev/null || git branch -D "$WT_BRANCH"
+      echo "  ✅  Branch '$WT_BRANCH' deleted"
+    else
+      echo "  ℹ️   Branch '${WT_BRANCH:-unknown}' kept — merge or delete it manually"
+    fi
+    return
+  fi
+
+  # ── workspace create ────────────────────────────────────────────────────────
+  local WT_PATH
+  WT_PATH="$(worktree_path)"
+
+  if [[ -d "$WT_PATH" ]]; then
+    echo "⚠️   Worktree already exists at $WT_PATH"
+    echo "     Open it in VSCode or run: orcheas workspace remove"
+    exit 0
+  fi
+
+  # Determine which branch to use
+  local BRANCH="${SUBCOMMAND:-}"
+
+  if [[ -z "$BRANCH" ]]; then
+    # Try to reuse the most recent claude/* branch, else prompt
+    local EXISTING
+    EXISTING="$(current_claude_branch)"
+    if [[ -n "$EXISTING" ]]; then
+      BRANCH="$EXISTING"
+      echo "  ℹ️   Reusing existing branch: $BRANCH"
+    else
+      echo "  ℹ️   No claude/* branch found. Creating a placeholder branch."
+      echo "      (Use /task inside the worktree to create a proper task branch)"
+      BRANCH="claude/workspace"
+    fi
+  fi
+
+  # Normalise: add claude/ prefix if missing
+  if [[ "$BRANCH" != claude/* ]]; then
+    BRANCH="claude/$BRANCH"
+  fi
+
+  echo ""
+  echo "🌿  Creating Claude worktree"
+  echo "    Path  : $WT_PATH"
+  echo "    Branch: $BRANCH"
+  echo ""
+
+  # Create branch if it doesn't exist
+  if ! git show-ref --verify --quiet "refs/heads/$BRANCH" 2>/dev/null; then
+    git branch "$BRANCH" main 2>/dev/null || git branch "$BRANCH" HEAD
+    echo "  ✅  Branch '$BRANCH' created from main"
+  fi
+
+  git worktree add "$WT_PATH" "$BRANCH"
+  echo "  ✅  Worktree created"
+
+  # Copy .claude/ into the worktree if it exists in the main tree
+  # (worktrees share .git but NOT the working files)
+  if [[ -d ".claude" ]] && [[ ! -d "$WT_PATH/.claude" ]]; then
+    cp -r ".claude" "$WT_PATH/.claude"
+    echo "  ✅  .claude/ copied into worktree"
+  fi
+
+  echo ""
+  echo "──────────────────────────────────────────────────────────"
+  echo "🎉  Worktree ready!"
+  echo ""
+  echo "  Your directory : $(pwd)           (your code, your branch)"
+  echo "  Claude's dir   : $WT_PATH   (Claude works here only)"
+  echo ""
+  echo "  Open Claude's workspace in VSCode:"
+  echo "    code $WT_PATH"
+  echo ""
+  echo "  Inside Claude Code, start a task with /task"
+  echo "  When Claude proposes a merge, review with:"
+  echo "    git diff main...$BRANCH"
+  echo "    git merge $BRANCH   (after approval)"
+  echo ""
+  echo "  To tear down after merging:"
+  echo "    orcheas workspace remove"
+}
+
+# ── clean ─────────────────────────────────────────────────────────────────────
 cmd_clean() {
   local VAULT="${1:-}"
   if [[ -z "$VAULT" ]]; then echo "Usage: orcheas clean <vault-path>"; exit 1; fi
@@ -230,27 +239,25 @@ cmd_clean() {
   VAULT="$(cd "$VAULT" && pwd)"
   PROJECT_ROOT="$(dirname "$VAULT")"
 
-  echo "🧹  Cleaning mutable state in $VAULT and $PROJECT_ROOT/.claude/logs/"
+  echo "🧹  Cleaning mutable state in $VAULT"
 
-  # Reset vault/active/
   cp "$TEMPLATES/vault/active/summary.md" "$VAULT/active/summary.md"
   echo "  ✅  vault/active/summary.md reset"
 
-  # Reset vault/memories/
   find "$VAULT/memories/" -name "*.md" -delete
   cp "$TEMPLATES/vault/memories/log.md" "$VAULT/memories/log.md"
   echo "  ✅  vault/memories/ reset"
 
-  # Reset .claude/logs/
   if [[ -d "$PROJECT_ROOT/.claude/logs" ]]; then
     find "$PROJECT_ROOT/.claude/logs/" -name "*.md" -delete
     echo "  ✅  .claude/logs/ cleared"
   fi
 
-  echo "  Core files untouched: vault/core/"
-  echo "  Task list untouched : TODO.md"
+  echo "  Core files untouched : vault/core/"
+  echo "  Task list untouched  : TODO.md"
 }
 
+# ── update ────────────────────────────────────────────────────────────────────
 cmd_update() {
   local SOURCE_FILE="$SELF_DIR/.source"
   local SOURCE_DIR="${ORCHEAS_SOURCE:-}"
@@ -268,19 +275,37 @@ cmd_update() {
   bash "$SOURCE_DIR/install.sh"
 }
 
+# ── dispatch ──────────────────────────────────────────────────────────────────
 case "${1:-help}" in
-  init)    cmd_init   "${2:-}" ;;
-  clean)   cmd_clean  "${2:-}" ;;
-  update)  cmd_update ;;
-  help|--help|-h) usage ;;
-  *) echo "Unknown command: $1"; usage; exit 1 ;;
+  init)
+    cmd_init "${2:-}"
+    ;;
+  workspace)
+    # Handle: orcheas workspace | orcheas workspace <branch> | orcheas workspace remove [--drop]
+    shift
+    cmd_workspace "${@:-}"
+    ;;
+  clean)
+    cmd_clean "${2:-}"
+    ;;
+  update)
+    cmd_update
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $1"
+    usage
+    exit 1
+    ;;
 esac
 ORCHEAS
 chmod +x orcheas
-echo "✅  orcheas (CLI)"
+echo "✅  orcheas (CLI — workspace commands added)"
 
 # =============================================================================
-#  CLAUDE.md  (template — copied into every project)
+#  CLAUDE.md  — add Worktree Protocol section
 # =============================================================================
 cat > CLAUDE.md <<'CLAUDEMD'
 # Claude Code — Rules & Workflow
@@ -292,16 +317,43 @@ cat > CLAUDE.md <<'CLAUDEMD'
 
 ## ⚡ Core Rules
 
+- **You work in the worktree only.** Your directory ends in `-claude`. Never operate in the human's main directory.
 - **Never push directly to `main` or `develop`.** Always work on a dedicated branch.
 - **Branch naming:** `claude/<feature-slug>` (e.g. `claude/add-auth`, `claude/fix-login-bug`).
 - **One branch per task.** Create a fresh branch when picking up any TODO item.
-- **Write a decision log** in `.claude/logs/<feature-slug>.md` for every feature or significant update. Use `/log`.
+- **Write a decision log** in `.claude/logs/<feature-slug>.md` for every feature or significant update.
 - **Never commit secrets**, `.env` files, or credentials.
 - **Tests first.** Write or update tests before or alongside the implementation.
 - **Keep changes focused.** One TODO item = one branch = one PR.
 - **Ask before large refactors.** If a task requires touching more than 3 unrelated files, confirm scope first.
-- **Follow existing code style.** Match what you see; do not reformat unrelated code.
+- **Follow existing code style.** Do not reformat unrelated code.
 - **Read context files before starting.** Always check `vault/core/goal.md`, `vault/core/rules.md`, and `TODO.md`.
+
+---
+
+## 🌿 Worktree Protocol
+
+You are operating in a **git worktree** — a separate filesystem directory that shares
+the same `.git` database as the human's main directory, but on a different branch.
+
+```
+~/projects/my-project/           ← human's directory (main or their branch)
+~/projects/my-project-claude/    ← YOUR directory   (claude/* branch)
+```
+
+**Rules:**
+- All your edits happen here, in the `-claude` worktree directory.
+- The human's directory is untouched until they explicitly merge your branch.
+- Shared files (`TODO.md`, `vault/`) are synced through git — commit your changes to make them visible to the human.
+- When you finish a task, run `/done` to push and propose the merge. The human reviews and merges from their directory.
+
+**Verify you are in the right place at session start:**
+```bash
+pwd   # should end in -claude
+git branch --show-current  # should be claude/*
+```
+
+If you are NOT in the worktree, stop and tell the human before touching any file.
 
 ---
 
@@ -311,7 +363,7 @@ cat > CLAUDE.md <<'CLAUDEMD'
 |------|---------|-----------|
 | `vault/core/goal.md` | Project objective | Human |
 | `vault/core/rules.md` | Hard project constraints | Human |
-| `vault/core/routine.md` | Tone & working style preferences | Human |
+| `vault/core/routine.md` | Tone & working style | Human |
 | `vault/active/summary.md` | Current project state | Claude (maintain) |
 | `vault/memories/log.md` | Append-only session notes | Claude (append) |
 | `TODO.md` | Shared task list | Both |
@@ -322,36 +374,44 @@ cat > CLAUDE.md <<'CLAUDEMD'
 ## 🔄 Workflow
 
 ```
-TODO.md  →  /task <id>  →  claude/<slug> branch
-                        →  read vault/core/ for context
-                        →  implement + tests
-                        →  /log  (write decision log)
-                        →  /done (push + merge proposal)
-                        →  human reviews & merges
+orcheas workspace          ← human creates your worktree
+     ↓
+code [project]-claude/     ← human opens YOUR directory in VSCode
+     ↓
+/task <id>                 ← you pick a task, branch is already set
+     ↓
+implement + tests
+     ↓
+/log                       ← write decision log
+     ↓
+/done                      ← push + merge proposal
+     ↓
+human reviews diff and merges from their directory
+     ↓
+orcheas workspace remove   ← human tears down worktree after merge
 ```
 
 ## 📋 TODO Protocol
 
 - Read `TODO.md` at the start of every session.
-- Pick the highest-priority unclaimed task (status: `[ ]`).
-- Mark it `[~]` (in progress) when you start.
-- Mark it `[x]` (done) only **after** the merge proposal is submitted and acknowledged.
-- Do NOT mark done before the human has reviewed.
+- Pick the highest-priority unclaimed task (`[ ]`).
+- Mark it `[~]` when you start.
+- Mark it `[x]` only after the merge proposal is submitted and acknowledged.
 
 ## 🌿 Git Protocol
 
 ```bash
-# Start a task
-git checkout main && git pull origin main
-git checkout -b claude/<feature-slug>
-
-# During work — commit often with clear messages
+# Inside your worktree — the branch is already set by orcheas workspace
+# Just start working and commit often:
 git commit -m "feat(<scope>): <what and why>"
 
-# Propose merge
-git push origin claude/<feature-slug>
-# Then output a /done merge proposal
+# When done, push from the worktree
+git push origin claude/<slug>
 ```
+
+**Never run `git checkout` to switch branches in the worktree.**
+If you need a different branch, tell the human — they will run `orcheas workspace remove`
+and `orcheas workspace <new-branch>`.
 
 ## 🔍 Code Review Protocol
 
@@ -363,29 +423,175 @@ When the human adds a `[review]` item to `TODO.md`:
 ## 🗂 Decision Log
 
 Every feature gets `.claude/logs/<feature-slug>.md` via `/log`. It must include:
-- **What** was built/changed
-- **Why** (the reasoning and trade-offs)
-- **How** (key technical decisions)
-- **Alternatives considered**
+**What** · **Why** · **How** · **Alternatives considered**
 
 ## 🔁 Session End
 
-Before ending any session:
 1. Commit all work-in-progress with a clear message.
-2. Update `vault/active/summary.md` with current project state.
+2. Update `vault/active/summary.md`.
 3. Append key decisions to `vault/memories/log.md`.
 4. If a task is complete, run `/done`.
 CLAUDEMD
-echo "✅  CLAUDE.md"
+echo "✅  CLAUDE.md (worktree protocol added)"
 
 # =============================================================================
-#  README.md
+#  templates/claude/hooks/session-start.sh  — worktree detection
+# =============================================================================
+cat > templates/claude/hooks/session-start.sh <<'EOF'
+#!/usr/bin/env bash
+# Injected as context when Claude starts a session.
+BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+DIR=$(pwd)
+PENDING=$(grep -c '^\- \[ \]' TODO.md 2>/dev/null || echo "0")
+IN_PROGRESS=$(grep -c '^\- \[~\]' TODO.md 2>/dev/null || echo "0")
+REVIEWS=$(grep -c '^\- \[review\]' TODO.md 2>/dev/null || echo "0")
+
+echo "=== Claude Code Session Context ==="
+echo "Directory       : $DIR"
+echo "Current branch  : $BRANCH"
+echo "Pending tasks   : $PENDING"
+echo "In progress     : $IN_PROGRESS"
+echo "Review requests : $REVIEWS"
+echo ""
+
+# Worktree check — directory should end in -claude
+if [[ "$DIR" != *-claude ]]; then
+  echo "⛔  WARNING: You do not appear to be in the Claude worktree."
+  echo "    Expected a directory ending in '-claude'."
+  echo "    Current path: $DIR"
+  echo ""
+  echo "    STOP. Tell the human to run: orcheas workspace"
+  echo "    Do not edit any files until you are in the correct directory."
+else
+  echo "✅  Worktree confirmed: $(basename "$DIR")"
+fi
+
+# Branch check
+if [[ "$BRANCH" != claude/* ]] && [[ "$BRANCH" != "workspace" ]]; then
+  echo "⚠️   Branch '$BRANCH' is not a claude/* branch."
+  echo "    Run /task to create a proper task branch before editing."
+fi
+
+echo ""
+echo "Context files: vault/core/goal.md | vault/core/rules.md | TODO.md"
+EOF
+chmod +x templates/claude/hooks/session-start.sh
+echo "✅  templates/claude/hooks/session-start.sh (worktree detection)"
+
+# =============================================================================
+#  templates/claude/hooks/verify-branch.sh  — worktree-aware
+# =============================================================================
+cat > templates/claude/hooks/verify-branch.sh <<'EOF'
+#!/usr/bin/env bash
+BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+DIR=$(pwd)
+
+# Hard block if not in worktree
+if [[ "$DIR" != *-claude ]]; then
+  echo "{\"block\": true, \"message\": \"⛔ You are not in the Claude worktree (path should end in -claude). Stop editing. Tell the human to run: orcheas workspace\"}"
+  exit 0
+fi
+
+# Soft warn if on wrong branch
+if [[ "$BRANCH" != "claude/"* ]]; then
+  echo "{\"feedback\": \"⚠️ Branch '$BRANCH' is not a claude/* branch. Use /task to start a proper task branch.\"}"
+fi
+EOF
+chmod +x templates/claude/hooks/verify-branch.sh
+echo "✅  templates/claude/hooks/verify-branch.sh (worktree-aware)"
+
+# =============================================================================
+#  templates/claude/commands/task.md  — worktree-aware
+# =============================================================================
+cat > templates/claude/commands/task.md <<'EOF'
+# /task
+
+Pick up a task from TODO.md and start working on it.
+
+## Pre-flight check
+
+Before anything, verify you are in the correct environment:
+
+```bash
+pwd              # must end in -claude
+git branch --show-current  # should be claude/* or workspace
+```
+
+If `pwd` does NOT end in `-claude`, stop immediately and tell the human:
+> "I am not in the worktree. Please run `orcheas workspace` first."
+
+## Steps
+
+1. Read `vault/core/goal.md`, `vault/core/rules.md`, and `vault/core/routine.md`.
+2. Read `TODO.md` — find the highest-priority pending task (`[ ]`).
+   - If an ID is given as argument (e.g. `/task 003`), use that task instead.
+3. Extract a slug from the task description (lowercase, hyphenated, 3-5 words).
+4. Create a task branch from current HEAD:
+   ```bash
+   git checkout -b claude/<slug>
+   ```
+   _(No need to pull from main — the worktree was created from main by orcheas.)_
+5. Update `TODO.md`: change `[ ]` → `[~]` for that task.
+6. Commit:
+   ```bash
+   git add TODO.md && git commit -m "chore: start task #<id> [claude]"
+   ```
+7. Announce the task and branch name, then begin implementation.
+8. When done: run `/log` then `/done`.
+EOF
+echo "✅  templates/claude/commands/task.md"
+
+# =============================================================================
+#  templates/claude/commands/done.md  — worktree-aware
+# =============================================================================
+cat > templates/claude/commands/done.md <<'EOF'
+# /done
+
+Finalize the current task and propose a merge.
+
+## Steps
+
+1. Verify you are in the worktree (`pwd` must end in `-claude`).
+2. Ensure all changes are committed:
+   ```bash
+   git add -A && git commit -m "feat(<scope>): <summary>"
+   ```
+3. Confirm `.claude/logs/<feature-slug>.md` exists. If not, run `/log` first.
+4. Update `vault/active/summary.md` with current project state.
+5. Append a session entry to `vault/memories/log.md`.
+6. Push the branch:
+   ```bash
+   git push origin claude/<current-branch>
+   ```
+7. Update `TODO.md`: change `[~]` → `[x]`. Commit and push.
+8. Output a merge proposal:
+
+---
+## 🔀 Merge Proposal
+
+- **Branch:** `claude/<slug>` → `main`
+- **Task:** #<id> — <title>
+- **Summary:** <what was built>
+- **Files changed:** <list>
+- **Decision log:** `.claude/logs/<slug>.md`
+- **Tests:** <pass / fail / n/a>
+- **Ready for review:** ✅
+
+> Human: to review run `git diff main...claude/<slug>`
+> To merge: `git merge claude/<slug>` then `orcheas workspace remove`
+---
+EOF
+echo "✅  templates/claude/commands/done.md"
+
+# =============================================================================
+#  README.md  — add workspace section
 # =============================================================================
 cat > README.md <<'README'
 # orcheas
 
-Scaffolds Claude Code projects with a **vault** for project context and a
-**`.claude/`** directory for hooks, slash commands, and decision logs.
+Scaffolds Claude Code projects with a **vault** for project context,
+a **`.claude/`** directory for hooks and slash commands, and
+**git worktrees** so Claude's code is fully isolated from yours until you merge.
 
 ---
 
@@ -400,108 +606,127 @@ source ~/.zshrc   # or ~/.bashrc
 
 ---
 
+## Workflow overview
+
+```
+orcheas init          ← scaffold vault + .claude/ + CLAUDE.md
+orcheas workspace     ← create Claude's isolated worktree at ../[project]-claude
+
+┌─────────────────────────────┐    ┌─────────────────────────────────┐
+│  ~/projects/my-project/     │    │  ~/projects/my-project-claude/  │
+│  (your directory)           │    │  (Claude's directory)           │
+│  branch: main               │    │  branch: claude/<slug>          │
+└─────────────────────────────┘    └─────────────────────────────────┘
+         same .git ──────────────────────────────────────────^
+
+      you code here              Claude codes here — never in yours
+```
+
+After Claude proposes a merge:
+```bash
+git diff main...claude/<slug>   # review
+git merge claude/<slug>         # merge when happy
+orcheas workspace remove        # tear down worktree
+```
+
+---
+
 ## Commands
 
 ### `orcheas init [path]`
 
-Scaffolds everything into the target directory (default: current dir).
+Scaffold everything into the target directory (default: current dir).
 
 ```
 orcheas init my-project/
 ```
 
 Creates:
-
 ```
 my-project/
-├── CLAUDE.md                      ← agent rules & workflow (auto-refreshed on init)
-├── TODO.md                        ← shared task list (human + Claude)
+├── CLAUDE.md                      ← agent rules & workflow (auto-refreshed)
+├── TODO.md                        ← shared task list
 ├── vault/
 │   ├── core/
-│   │   ├── goal.md                ← EDIT: your project objective
+│   │   ├── goal.md                ← EDIT: project objective
 │   │   ├── rules.md               ← EDIT: hard constraints for Claude
 │   │   └── routine.md             ← EDIT: tone and working style
 │   ├── active/
-│   │   └── summary.md             ← Claude-maintained: current project state
+│   │   └── summary.md             ← Claude-maintained state
 │   └── memories/
-│       └── log.md                 ← Claude-maintained: append-only session log
+│       └── log.md                 ← Claude-maintained append log
 └── .claude/
-    ├── settings.json              ← hooks (branch guard, file protection)
-    ├── commands/
-    │   ├── task.md                ← /task  — pick a TODO, create branch, start work
-    │   ├── done.md                ← /done  — push branch, output merge proposal
-    │   ├── log.md                 ← /log   — write per-feature decision log
-    │   └── review.md              ← /review — structured code review
-    ├── agents/
-    │   └── code-reviewer.md       ← review agent persona
-    ├── hooks/
-    │   ├── session-start.sh       ← inject context (branch, todo count) on start
-    │   ├── session-stop.sh        ← remind to commit & propose merge on stop
-    │   ├── protect-files.sh       ← block writes to .env, package-lock, etc.
-    │   └── verify-branch.sh       ← warn if editing directly on main
-    └── logs/                      ← per-feature decision logs (Claude writes here)
+    ├── settings.json              ← hooks
+    ├── commands/                  ← /task  /done  /log  /review
+    ├── agents/                    ← code-reviewer persona
+    ├── hooks/                     ← session context + worktree guard
+    └── logs/                      ← per-feature decision logs
 ```
 
-Safe to re-run — skips files that already exist. `CLAUDE.md` is always refreshed.
+---
+
+### `orcheas workspace [branch]`
+
+Create Claude's isolated git worktree at `../[project-name]-claude`.
+
+```bash
+orcheas workspace                    # reuse latest claude/* branch (or create placeholder)
+orcheas workspace claude/add-auth    # use a specific branch
+orcheas workspace add-auth           # claude/ prefix added automatically
+```
+
+- Creates the branch from `main` if it doesn't exist yet
+- Copies `.claude/` into the worktree
+- Prints the `code` command to open it in VSCode
+
+**After setup, open Claude's workspace in a separate VSCode window:**
+```bash
+code ../my-project-claude
+```
+Then launch Claude Code there — it will only ever see and touch that directory.
+
+---
+
+### `orcheas workspace remove [--drop]`
+
+Remove Claude's worktree after a merge.
+
+```bash
+orcheas workspace remove           # remove worktree, keep branch
+orcheas workspace remove --drop    # remove worktree AND delete the branch
+```
 
 ---
 
 ### `orcheas clean <vault-path>`
 
-Resets mutable state without touching `vault/core/` or `TODO.md`.
+Reset mutable state without touching `vault/core/` or `TODO.md`.
 
 ```bash
 orcheas clean my-project/vault
 ```
 
-Resets:
-- `vault/active/summary.md`
-- `vault/memories/*.md`
-- `.claude/logs/*.md`
+Resets: `vault/active/summary.md` · `vault/memories/*.md` · `.claude/logs/*.md`
 
 ---
 
 ### `orcheas update`
 
-Reinstalls from the source repo.
+Reinstall from source repo.
 
 ```bash
 orcheas update
-# If you moved the repo:
-ORCHEAS_SOURCE=/new/path orcheas update
+ORCHEAS_SOURCE=/new/path orcheas update   # if you moved the repo
 ```
 
 ---
 
-## Workflow
-
-1. `orcheas init` in your project
-2. Edit `vault/core/goal.md` — describe what you're building
-3. Edit `vault/core/rules.md` — add your project-specific constraints
-4. Add tasks to `TODO.md`
-5. Open Claude Code in VSCode → type **`/task`**
-6. Claude creates a `claude/<slug>` branch and starts working
-7. When done, Claude runs **`/log`** (decision log) + **`/done`** (merge proposal)
-8. You review the branch and merge when happy
-
-### Code review by Claude
-
-Add a review request to `TODO.md`:
-
-```markdown
-- [review] #R01 · Review auth middleware · target: src/middleware/auth.ts
-```
-
-Then tell Claude: `/review src/middleware/auth.ts`
-
----
-
-## Slash commands reference
+## Slash commands (inside Claude Code)
 
 | Command | What it does |
 |---------|-------------|
-| `/task [id]` | Pick a TODO item, create `claude/<slug>` branch, start implementation |
-| `/done` | Commit, push, output a formatted merge proposal |
+| `/task [id]` | Verify worktree, pick a TODO, create `claude/<slug>` branch |
+| `/done` | Commit, push, output merge proposal with review instructions |
 | `/log` | Write `.claude/logs/<slug>.md` with why/how/alternatives |
 | `/review <target>` | Structured code review saved to `.claude/logs/` |
 
@@ -512,563 +737,36 @@ Then tell Claude: `/review src/middleware/auth.ts`
 | Dependency | Notes |
 |------------|-------|
 | `bash` ≥ 3.2 | macOS default |
-| `git` | Required for branch workflow |
+| `git` ≥ 2.5 | Worktrees require git 2.5+ |
 | `claude` CLI | [Claude Code](https://docs.anthropic.com/claude-code) |
 README
-echo "✅  README.md"
-
-# =============================================================================
-#  templates/vault/core/
-# =============================================================================
-cat > templates/vault/core/goal.md <<'EOF'
-# Project Goal
-
-<!-- EDIT THIS FILE: describe what you are building -->
-
-## Objective
-
-One clear sentence describing the product/system.
-
-## Key outcomes
-
-- Outcome 1
-- Outcome 2
-
-## Out of scope
-
-- Things Claude should NOT build without explicit ask
-EOF
-
-cat > templates/vault/core/rules.md <<'EOF'
-# Project Rules
-
-<!-- EDIT THIS FILE: hard constraints Claude must always follow -->
-
-## Tech stack
-
-- Language: <!-- e.g. TypeScript -->
-- Framework: <!-- e.g. Next.js -->
-- Database: <!-- e.g. PostgreSQL -->
-- Package manager: <!-- e.g. pnpm -->
-
-## Coding constraints
-
-- [ ] All public functions must have JSDoc/docstring
-- [ ] No `any` types (TypeScript)
-- [ ] All API routes require authentication unless explicitly noted
-- [ ] Add rule...
-
-## Forbidden actions
-
-- Never delete migration files
-- Never modify files in `src/generated/`
-- Add rule...
-EOF
-
-cat > templates/vault/core/routine.md <<'EOF'
-# Agent Routine & Style
-
-<!-- EDIT THIS FILE: define how you want Claude to work -->
-
-## Communication style
-
-- Be concise in commit messages
-- Ask before making assumptions on ambiguous requirements
-- Prefer explicit over implicit
-
-## Code style
-
-- Prefer small, focused functions
-- Descriptive variable names over abbreviations
-- Comments for "why", not "what"
-
-## Workflow preferences
-
-- Commit frequently with meaningful messages
-- Write tests alongside implementation (not after)
-- Update TODO.md status as you go
-EOF
-
-echo "✅  templates/vault/core/"
-
-# =============================================================================
-#  templates/vault/active/ & memories/
-# =============================================================================
-cat > templates/vault/active/summary.md <<'EOF'
-# Project Summary
-
-<!-- Claude maintains this file. Updated at the end of each session. -->
-
-**Last updated:** —
-**Current branch:** —
-**Active task:** —
-
-## Current state
-
-<!-- What has been built so far -->
-
-## Next up
-
-<!-- What's coming next -->
-
-## Blockers
-
-<!-- Anything waiting on the human -->
-EOF
-
-cat > templates/vault/memories/log.md <<'EOF'
-# Session Log
-
-<!-- Claude appends to this file. Do not delete entries. -->
-<!-- Format: ## YYYY-MM-DD — <branch> — <summary> -->
-
-EOF
-
-echo "✅  templates/vault/active/ & memories/"
-
-# =============================================================================
-#  templates/TODO.md
-# =============================================================================
-cat > templates/TODO.md <<'EOF'
-# TODO — Shared Task List
-
-> **Status legend:**
-> `[ ]` = pending · `[~]` = in progress (Claude) · `[x]` = done · `[review]` = code review requested
-
----
-
-## 🔥 High Priority
-
-- [ ] #001 · **Example task** — Replace with your first real task
-  - _Branch:_ `claude/example-task`
-  - _Notes:_ Add context, links, or constraints here
-
-## 🟡 Normal Priority
-
-<!-- Add tasks here -->
-
-## 🧊 Backlog
-
-<!-- Add tasks here -->
-
----
-
-## ✅ Completed
-
-<!-- Claude moves finished items here after merge is proposed -->
-
----
-
-## 🔍 Review Requests
-
-> Add items here when you want Claude to review your code.
-> Format: `[review] #<id> · <description> · target: <file-or-branch>`
-
-<!-- Example:
-- [review] #R01 · Review auth middleware · target: src/middleware/auth.ts
--->
-EOF
-
-echo "✅  templates/TODO.md"
-
-# =============================================================================
-#  templates/claude/settings.json
-# =============================================================================
-cat > templates/claude/settings.json <<'EOF'
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/protect-files.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/verify-branch.sh"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/session-start.sh"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/session-stop.sh"
-          }
-        ]
-      }
-    ]
-  },
-  "permissions": {
-    "deny": [
-      "Bash(git push * main)",
-      "Bash(git push * develop)",
-      "Bash(rm -rf *)"
-    ]
-  }
-}
-EOF
-
-cat > templates/claude/.gitignore <<'EOF'
-settings.local.json
-EOF
-
-echo "✅  templates/claude/settings.json"
-
-# =============================================================================
-#  templates/claude/hooks/
-# =============================================================================
-cat > templates/claude/hooks/session-start.sh <<'EOF'
-#!/usr/bin/env bash
-# Injected as context when Claude starts a session
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-PENDING=$(grep -c '^\- \[ \]' TODO.md 2>/dev/null || echo "0")
-IN_PROGRESS=$(grep -c '^\- \[~\]' TODO.md 2>/dev/null || echo "0")
-REVIEWS=$(grep -c '^\- \[review\]' TODO.md 2>/dev/null || echo "0")
-
-echo "=== Claude Code Session Context ==="
-echo "Current branch  : $BRANCH"
-echo "Pending tasks   : $PENDING"
-echo "In progress     : $IN_PROGRESS"
-echo "Review requests : $REVIEWS"
-echo ""
-echo "Context files   : vault/core/goal.md | vault/core/rules.md | TODO.md"
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "develop" ]; then
-  echo "⚠️  WARNING: You are on '$BRANCH'. Create a claude/* branch before editing any code."
-fi
-EOF
-
-cat > templates/claude/hooks/session-stop.sh <<'EOF'
-#!/usr/bin/env bash
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-UNCOMMITTED=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-
-if [ "$UNCOMMITTED" -gt "0" ]; then
-  echo "⚠️  $UNCOMMITTED uncommitted change(s) on '$BRANCH'. Commit or stash before ending."
-fi
-
-if [[ "$BRANCH" == claude/* ]]; then
-  echo "ℹ️  On branch '$BRANCH'. If the task is complete, run /done to propose a merge."
-fi
-
-echo "📝  Remember to update vault/active/summary.md and append to vault/memories/log.md."
-EOF
-
-cat > templates/claude/hooks/protect-files.sh <<'EOF'
-#!/usr/bin/env bash
-INPUT=$(cat)
-FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
-
-PROTECTED=(".env" ".env.local" ".env.production" ".env.staging" "package-lock.json" ".git/")
-for pattern in "${PROTECTED[@]}"; do
-  if [[ "$FILE_PATH" == *"$pattern"* ]]; then
-    echo "{\"block\": true, \"message\": \"Blocked: '$FILE_PATH' is a protected file. Do not modify it.\"}"
-    exit 0
-  fi
-done
-EOF
-
-cat > templates/claude/hooks/verify-branch.sh <<'EOF'
-#!/usr/bin/env bash
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "develop" ]; then
-  echo "{\"feedback\": \"⚠️ Editing files on '$BRANCH'. Move to a claude/* branch first.\"}"
-fi
-EOF
-
-chmod +x \
-  templates/claude/hooks/session-start.sh \
-  templates/claude/hooks/session-stop.sh \
-  templates/claude/hooks/protect-files.sh \
-  templates/claude/hooks/verify-branch.sh
-
-echo "✅  templates/claude/hooks/"
-
-# =============================================================================
-#  templates/claude/commands/
-# =============================================================================
-cat > templates/claude/commands/task.md <<'EOF'
-# /task
-
-Pick up a task from TODO.md and start working on it.
-
-## Steps
-
-1. Read `vault/core/goal.md`, `vault/core/rules.md`, and `vault/core/routine.md` for project context.
-2. Read `TODO.md` and identify the highest-priority pending task (`[ ]`).
-   - If an ID is provided as argument (e.g. `/task 003`), use that task instead.
-3. Extract a slug from the task description (lowercase, hyphenated, 3-5 words).
-4. Create the branch:
-   ```bash
-   git checkout main && git pull origin main
-   git checkout -b claude/<slug>
-   ```
-5. Update `TODO.md`: change `[ ]` → `[~]` for that task.
-6. Commit:
-   ```bash
-   git add TODO.md && git commit -m "chore: start task #<id> [claude]"
-   ```
-7. Announce the task and branch, then begin implementation.
-8. When done: run `/log` then `/done`.
-EOF
-
-cat > templates/claude/commands/done.md <<'EOF'
-# /done
-
-Finalize the current task and propose a merge.
-
-## Steps
-
-1. Ensure all changes are committed:
-   ```bash
-   git add -A && git commit -m "feat(<scope>): <summary>"
-   ```
-2. Confirm `.claude/logs/<feature-slug>.md` exists. If not, run `/log` first.
-3. Update `vault/active/summary.md` with current project state.
-4. Append a session entry to `vault/memories/log.md`.
-5. Push:
-   ```bash
-   git push origin claude/<current-branch>
-   ```
-6. Update `TODO.md`: change `[~]` → `[x]`.
-7. Commit and push the TODO update.
-8. Output a merge proposal:
-
----
-## 🔀 Merge Proposal
-
-- **Branch:** `claude/<slug>` → `main`
-- **Task:** #<id> — <title>
-- **Summary:** <what was built>
-- **Files changed:** <list>
-- **Decision log:** `.claude/logs/<slug>.md`
-- **Tests:** <pass / fail / n/a>
-- **Ready for review:** ✅
-
-> Please review and merge when ready.
----
-EOF
-
-cat > templates/claude/commands/log.md <<'EOF'
-# /log
-
-Write a decision log for the current feature.
-
-## Steps
-
-1. Determine the slug from the current branch (strip `claude/` prefix).
-2. Create `.claude/logs/<slug>.md` using the template below.
-3. Commit:
-   ```bash
-   git add .claude/logs/<slug>.md
-   git commit -m "docs: add decision log for <slug> [claude]"
-   ```
-
-## Template
-
-```markdown
-# Decision Log — <slug>
-
-**Date:** <YYYY-MM-DD>
-**Branch:** `claude/<slug>`
-**Task ref:** #<id>
-
----
-
-## What
-
-<Describe what was built or changed.>
-
-## Why
-
-<Explain the reason. What problem does it solve?>
-
-## How
-
-<Key technical approach.>
-
-### Decisions
-
-| Decision | Chosen | Reason |
-|----------|--------|--------|
-| <topic>  | <choice> | <why> |
-
-## Alternatives considered
-
-- **<Alt 1>:** <why rejected>
-- **<Alt 2>:** <why rejected>
-
-## Impact & risks
-
-- <Side effects, performance, known limitations>
-
-## Follow-up
-
-- [ ] <Anything left to do>
-```
-EOF
-
-cat > templates/claude/commands/review.md <<'EOF'
-# /review
-
-Perform a structured code review on the specified target.
-
-## Usage
-
-```
-/review <file-or-branch>
-```
-
-If no argument, check `TODO.md` for `[review]` items and review the first one.
-
-## Steps
-
-1. Identify the target.
-2. If branch: `git diff main...<branch>`
-3. If file: read full content.
-4. Produce a review report (template below).
-5. Save to `.claude/logs/review-<slug>-<YYYY-MM-DD>.md`.
-6. Mark the `[review]` item in `TODO.md` as `[x]`.
-
-## Review Report Template
-
-```markdown
-# Code Review — <target>
-
-**Date:** <YYYY-MM-DD>
-**Reviewer:** Claude
-**Target:** <file or branch>
-
----
-
-## Summary
-
-<2-3 sentence overall assessment.>
-
-## ✅ Strengths
-
-- <what is done well>
-
-## ⚠️ Issues
-
-| Severity | File | Line | Description | Suggestion |
-|----------|------|------|-------------|------------|
-| 🔴 High  |      |      |             |            |
-| 🟡 Med   |      |      |             |            |
-| 🟢 Low   |      |      |             |            |
-
-## 💡 Suggestions (non-blocking)
-
-- <style, naming, architecture ideas>
-
-## Security Checklist
-
-- [ ] No hardcoded secrets
-- [ ] Input validation present
-- [ ] Errors handled safely (no stack traces exposed)
-
-## Verdict
-
-- [ ] ✅ Approve
-- [ ] 🔄 Approve with minor changes
-- [ ] ❌ Changes required
-```
-EOF
-
-echo "✅  templates/claude/commands/"
-
-# =============================================================================
-#  templates/claude/agents/
-# =============================================================================
-cat > templates/claude/agents/code-reviewer.md <<'EOF'
-# Agent: Code Reviewer
-
-You are a senior software engineer performing structured code reviews.
-You are thorough, constructive, and precise. You do not nitpick style
-unless it impacts readability or maintainability.
-
-## Responsibilities
-
-- Identify bugs, logic errors, and edge cases
-- Flag security issues (injection, secrets, auth bypass, etc.)
-- Check error handling and resilience
-- Evaluate test coverage
-- Note architectural concerns without over-engineering
-- Praise what is done well — balanced feedback is more useful
-
-## Output
-
-Follow the Review Report Template in `.claude/commands/review.md`.
-Save the report to `.claude/logs/review-<slug>-<date>.md`.
-
-## Tone
-
-Professional, specific, actionable. Every issue should come with a suggestion.
-The goal is to improve the code, not to criticize the author.
-EOF
-
-echo "✅  templates/claude/agents/"
-
-# =============================================================================
-#  .gitignore
-# =============================================================================
-cat > .gitignore <<'EOF'
-# orcheas personal/local files
-templates/claude/logs/
-
-# OS
-.DS_Store
-Thumbs.db
-EOF
-
-echo "✅  .gitignore"
+echo "✅  README.md (workspace section added)"
 
 # =============================================================================
 #  Summary
 # =============================================================================
 echo ""
 echo "──────────────────────────────────────────────────────────"
-echo "🎉  Overwrite complete! Files updated:"
+echo "🎉  Worktree update applied!"
 echo ""
-echo "  Modified:"
-echo "    install.sh       — now also copies .claude/ template"
-echo "    orcheas          — new init/clean logic for .claude/"
-echo "    CLAUDE.md        — full workflow: branches, logs, slash commands"
-echo "    README.md        — updated docs"
-echo "    .gitignore"
+echo "  Modified files:"
+echo "    orcheas                              ← workspace create/remove commands"
+echo "    CLAUDE.md                            ← worktree protocol section"
+echo "    README.md                            ← workspace docs"
+echo "    templates/claude/hooks/"
+echo "      session-start.sh                  ← worktree detection + hard stop"
+echo "      verify-branch.sh                  ← blocks edits if not in worktree"
+echo "    templates/claude/commands/"
+echo "      task.md                           ← pre-flight worktree check"
+echo "      done.md                           ← merge proposal includes review cmds"
 echo ""
-echo "  New templates:"
-echo "    templates/claude/settings.json"
-echo "    templates/claude/commands/{task,done,log,review}.md"
-echo "    templates/claude/agents/code-reviewer.md"
-echo "    templates/claude/hooks/{session-start,session-stop,protect-files,verify-branch}.sh"
-echo "    templates/TODO.md"
-echo "    templates/vault/* (refreshed)"
+echo "  New orcheas commands:"
+echo "    orcheas workspace                   create worktree at ../[project]-claude"
+echo "    orcheas workspace <branch>          create with specific branch"
+echo "    orcheas workspace remove            tear down after merge"
+echo "    orcheas workspace remove --drop     tear down + delete branch"
 echo ""
-echo "  Next: commit everything and push to GitHub"
+echo "  Commit and push:"
 echo "    git add -A"
-echo "    git commit -m 'feat: overhaul with full Claude Code workflow'"
+echo "    git commit -m 'feat: add git worktree isolation for Claude'"
 echo "    git push"

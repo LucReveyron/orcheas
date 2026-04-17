@@ -1,7 +1,8 @@
 # orcheas
 
-Scaffolds Claude Code projects with a **vault** for project context and a
-**`.claude/`** directory for hooks, slash commands, and decision logs.
+Scaffolds Claude Code projects with a **vault** for project context,
+a **`.claude/`** directory for hooks and slash commands, and
+**git worktrees** so Claude's code is fully isolated from yours until you merge.
 
 ---
 
@@ -16,108 +17,127 @@ source ~/.zshrc   # or ~/.bashrc
 
 ---
 
+## Workflow overview
+
+```
+orcheas init          ← scaffold vault + .claude/ + CLAUDE.md
+orcheas workspace     ← create Claude's isolated worktree at ../[project]-claude
+
+┌─────────────────────────────┐    ┌─────────────────────────────────┐
+│  ~/projects/my-project/     │    │  ~/projects/my-project-claude/  │
+│  (your directory)           │    │  (Claude's directory)           │
+│  branch: main               │    │  branch: claude/<slug>          │
+└─────────────────────────────┘    └─────────────────────────────────┘
+         same .git ──────────────────────────────────────────^
+
+      you code here              Claude codes here — never in yours
+```
+
+After Claude proposes a merge:
+```bash
+git diff main...claude/<slug>   # review
+git merge claude/<slug>         # merge when happy
+orcheas workspace remove        # tear down worktree
+```
+
+---
+
 ## Commands
 
 ### `orcheas init [path]`
 
-Scaffolds everything into the target directory (default: current dir).
+Scaffold everything into the target directory (default: current dir).
 
 ```
 orcheas init my-project/
 ```
 
 Creates:
-
 ```
 my-project/
-├── CLAUDE.md                      ← agent rules & workflow (auto-refreshed on init)
-├── TODO.md                        ← shared task list (human + Claude)
+├── CLAUDE.md                      ← agent rules & workflow (auto-refreshed)
+├── TODO.md                        ← shared task list
 ├── vault/
 │   ├── core/
-│   │   ├── goal.md                ← EDIT: your project objective
+│   │   ├── goal.md                ← EDIT: project objective
 │   │   ├── rules.md               ← EDIT: hard constraints for Claude
 │   │   └── routine.md             ← EDIT: tone and working style
 │   ├── active/
-│   │   └── summary.md             ← Claude-maintained: current project state
+│   │   └── summary.md             ← Claude-maintained state
 │   └── memories/
-│       └── log.md                 ← Claude-maintained: append-only session log
+│       └── log.md                 ← Claude-maintained append log
 └── .claude/
-    ├── settings.json              ← hooks (branch guard, file protection)
-    ├── commands/
-    │   ├── task.md                ← /task  — pick a TODO, create branch, start work
-    │   ├── done.md                ← /done  — push branch, output merge proposal
-    │   ├── log.md                 ← /log   — write per-feature decision log
-    │   └── review.md              ← /review — structured code review
-    ├── agents/
-    │   └── code-reviewer.md       ← review agent persona
-    ├── hooks/
-    │   ├── session-start.sh       ← inject context (branch, todo count) on start
-    │   ├── session-stop.sh        ← remind to commit & propose merge on stop
-    │   ├── protect-files.sh       ← block writes to .env, package-lock, etc.
-    │   └── verify-branch.sh       ← warn if editing directly on main
-    └── logs/                      ← per-feature decision logs (Claude writes here)
+    ├── settings.json              ← hooks
+    ├── commands/                  ← /task  /done  /log  /review
+    ├── agents/                    ← code-reviewer persona
+    ├── hooks/                     ← session context + worktree guard
+    └── logs/                      ← per-feature decision logs
 ```
 
-Safe to re-run — skips files that already exist. `CLAUDE.md` is always refreshed.
+---
+
+### `orcheas workspace [branch]`
+
+Create Claude's isolated git worktree at `../[project-name]-claude`.
+
+```bash
+orcheas workspace                    # reuse latest claude/* branch (or create placeholder)
+orcheas workspace claude/add-auth    # use a specific branch
+orcheas workspace add-auth           # claude/ prefix added automatically
+```
+
+- Creates the branch from `main` if it doesn't exist yet
+- Copies `.claude/` into the worktree
+- Prints the `code` command to open it in VSCode
+
+**After setup, open Claude's workspace in a separate VSCode window:**
+```bash
+code ../my-project-claude
+```
+Then launch Claude Code there — it will only ever see and touch that directory.
+
+---
+
+### `orcheas workspace remove [--drop]`
+
+Remove Claude's worktree after a merge.
+
+```bash
+orcheas workspace remove           # remove worktree, keep branch
+orcheas workspace remove --drop    # remove worktree AND delete the branch
+```
 
 ---
 
 ### `orcheas clean <vault-path>`
 
-Resets mutable state without touching `vault/core/` or `TODO.md`.
+Reset mutable state without touching `vault/core/` or `TODO.md`.
 
 ```bash
 orcheas clean my-project/vault
 ```
 
-Resets:
-- `vault/active/summary.md`
-- `vault/memories/*.md`
-- `.claude/logs/*.md`
+Resets: `vault/active/summary.md` · `vault/memories/*.md` · `.claude/logs/*.md`
 
 ---
 
 ### `orcheas update`
 
-Reinstalls from the source repo.
+Reinstall from source repo.
 
 ```bash
 orcheas update
-# If you moved the repo:
-ORCHEAS_SOURCE=/new/path orcheas update
+ORCHEAS_SOURCE=/new/path orcheas update   # if you moved the repo
 ```
 
 ---
 
-## Workflow
-
-1. `orcheas init` in your project
-2. Edit `vault/core/goal.md` — describe what you're building
-3. Edit `vault/core/rules.md` — add your project-specific constraints
-4. Add tasks to `TODO.md`
-5. Open Claude Code in VSCode → type **`/task`**
-6. Claude creates a `claude/<slug>` branch and starts working
-7. When done, Claude runs **`/log`** (decision log) + **`/done`** (merge proposal)
-8. You review the branch and merge when happy
-
-### Code review by Claude
-
-Add a review request to `TODO.md`:
-
-```markdown
-- [review] #R01 · Review auth middleware · target: src/middleware/auth.ts
-```
-
-Then tell Claude: `/review src/middleware/auth.ts`
-
----
-
-## Slash commands reference
+## Slash commands (inside Claude Code)
 
 | Command | What it does |
 |---------|-------------|
-| `/task [id]` | Pick a TODO item, create `claude/<slug>` branch, start implementation |
-| `/done` | Commit, push, output a formatted merge proposal |
+| `/task [id]` | Verify worktree, pick a TODO, create `claude/<slug>` branch |
+| `/done` | Commit, push, output merge proposal with review instructions |
 | `/log` | Write `.claude/logs/<slug>.md` with why/how/alternatives |
 | `/review <target>` | Structured code review saved to `.claude/logs/` |
 
@@ -128,5 +148,5 @@ Then tell Claude: `/review src/middleware/auth.ts`
 | Dependency | Notes |
 |------------|-------|
 | `bash` ≥ 3.2 | macOS default |
-| `git` | Required for branch workflow |
+| `git` ≥ 2.5 | Worktrees require git 2.5+ |
 | `claude` CLI | [Claude Code](https://docs.anthropic.com/claude-code) |

@@ -7,16 +7,43 @@
 
 ## ⚡ Core Rules
 
+- **You work in the worktree only.** Your directory ends in `-claude`. Never operate in the human's main directory.
 - **Never push directly to `main` or `develop`.** Always work on a dedicated branch.
 - **Branch naming:** `claude/<feature-slug>` (e.g. `claude/add-auth`, `claude/fix-login-bug`).
 - **One branch per task.** Create a fresh branch when picking up any TODO item.
-- **Write a decision log** in `.claude/logs/<feature-slug>.md` for every feature or significant update. Use `/log`.
+- **Write a decision log** in `.claude/logs/<feature-slug>.md` for every feature or significant update.
 - **Never commit secrets**, `.env` files, or credentials.
 - **Tests first.** Write or update tests before or alongside the implementation.
 - **Keep changes focused.** One TODO item = one branch = one PR.
 - **Ask before large refactors.** If a task requires touching more than 3 unrelated files, confirm scope first.
-- **Follow existing code style.** Match what you see; do not reformat unrelated code.
+- **Follow existing code style.** Do not reformat unrelated code.
 - **Read context files before starting.** Always check `vault/core/goal.md`, `vault/core/rules.md`, and `TODO.md`.
+
+---
+
+## 🌿 Worktree Protocol
+
+You are operating in a **git worktree** — a separate filesystem directory that shares
+the same `.git` database as the human's main directory, but on a different branch.
+
+```
+~/projects/my-project/           ← human's directory (main or their branch)
+~/projects/my-project-claude/    ← YOUR directory   (claude/* branch)
+```
+
+**Rules:**
+- All your edits happen here, in the `-claude` worktree directory.
+- The human's directory is untouched until they explicitly merge your branch.
+- Shared files (`TODO.md`, `vault/`) are synced through git — commit your changes to make them visible to the human.
+- When you finish a task, run `/done` to push and propose the merge. The human reviews and merges from their directory.
+
+**Verify you are in the right place at session start:**
+```bash
+pwd   # should end in -claude
+git branch --show-current  # should be claude/*
+```
+
+If you are NOT in the worktree, stop and tell the human before touching any file.
 
 ---
 
@@ -26,7 +53,7 @@
 |------|---------|-----------|
 | `vault/core/goal.md` | Project objective | Human |
 | `vault/core/rules.md` | Hard project constraints | Human |
-| `vault/core/routine.md` | Tone & working style preferences | Human |
+| `vault/core/routine.md` | Tone & working style | Human |
 | `vault/active/summary.md` | Current project state | Claude (maintain) |
 | `vault/memories/log.md` | Append-only session notes | Claude (append) |
 | `TODO.md` | Shared task list | Both |
@@ -37,36 +64,44 @@
 ## 🔄 Workflow
 
 ```
-TODO.md  →  /task <id>  →  claude/<slug> branch
-                        →  read vault/core/ for context
-                        →  implement + tests
-                        →  /log  (write decision log)
-                        →  /done (push + merge proposal)
-                        →  human reviews & merges
+orcheas workspace          ← human creates your worktree
+     ↓
+code [project]-claude/     ← human opens YOUR directory in VSCode
+     ↓
+/task <id>                 ← you pick a task, branch is already set
+     ↓
+implement + tests
+     ↓
+/log                       ← write decision log
+     ↓
+/done                      ← push + merge proposal
+     ↓
+human reviews diff and merges from their directory
+     ↓
+orcheas workspace remove   ← human tears down worktree after merge
 ```
 
 ## 📋 TODO Protocol
 
 - Read `TODO.md` at the start of every session.
-- Pick the highest-priority unclaimed task (status: `[ ]`).
-- Mark it `[~]` (in progress) when you start.
-- Mark it `[x]` (done) only **after** the merge proposal is submitted and acknowledged.
-- Do NOT mark done before the human has reviewed.
+- Pick the highest-priority unclaimed task (`[ ]`).
+- Mark it `[~]` when you start.
+- Mark it `[x]` only after the merge proposal is submitted and acknowledged.
 
 ## 🌿 Git Protocol
 
 ```bash
-# Start a task
-git checkout main && git pull origin main
-git checkout -b claude/<feature-slug>
-
-# During work — commit often with clear messages
+# Inside your worktree — the branch is already set by orcheas workspace
+# Just start working and commit often:
 git commit -m "feat(<scope>): <what and why>"
 
-# Propose merge
-git push origin claude/<feature-slug>
-# Then output a /done merge proposal
+# When done, push from the worktree
+git push origin claude/<slug>
 ```
+
+**Never run `git checkout` to switch branches in the worktree.**
+If you need a different branch, tell the human — they will run `orcheas workspace remove`
+and `orcheas workspace <new-branch>`.
 
 ## 🔍 Code Review Protocol
 
@@ -78,15 +113,11 @@ When the human adds a `[review]` item to `TODO.md`:
 ## 🗂 Decision Log
 
 Every feature gets `.claude/logs/<feature-slug>.md` via `/log`. It must include:
-- **What** was built/changed
-- **Why** (the reasoning and trade-offs)
-- **How** (key technical decisions)
-- **Alternatives considered**
+**What** · **Why** · **How** · **Alternatives considered**
 
 ## 🔁 Session End
 
-Before ending any session:
 1. Commit all work-in-progress with a clear message.
-2. Update `vault/active/summary.md` with current project state.
+2. Update `vault/active/summary.md`.
 3. Append key decisions to `vault/memories/log.md`.
 4. If a task is complete, run `/done`.
