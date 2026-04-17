@@ -1,19 +1,19 @@
 # Project Summary
 
-> Maintained by the agent. Updated after each completed step.
+<!-- Claude maintains this file. Updated at the end of each session. -->
 
-## Status
+**Last updated:** —
+**Current branch:** —
+**Active task:** —
 
-🟡 Not started
+## Current state
 
-## What has been done
+<!-- What has been built so far -->
 
-Nothing yet.
+## Next up
 
-## Current focus
+<!-- What's coming next -->
 
-Awaiting first plan.
+## Blockers
 
-## Known blockers
-
-None.
+<!-- Anything waiting on the human -->

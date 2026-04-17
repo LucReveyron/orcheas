@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# orcheas — Claude Code project scaffolding CLI
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_MD_SRC="$SELF_DIR/CLAUDE.md"
+TEMPLATES="$SELF_DIR/templates"
+
+usage() {
+  cat <<EOF
+Usage: orcheas <command> [args]
+
+Commands:
+  init [path]     Scaffold vault + .claude/ + CLAUDE.md (default: current dir)
+  clean <path>    Reset mutable state (active/, .claude/logs/) without touching core/
+  update          Reinstall from source repo
+  help            Show this message
+EOF
+}
+
+cmd_init() {
+  local TARGET="${1:-.}"
+  mkdir -p "$TARGET"
+  TARGET="$(cd "$TARGET" && pwd)"
+
+  echo ""
+  echo "🤖  orcheas init → $TARGET"
+  echo "──────────────────────────────────────────────────────────"
+
+  # ── vault structure ─────────────────────────────────────────────────────────
+  for dir in vault/core vault/active vault/memories; do
+    mkdir -p "$TARGET/$dir"
+  done
+
+  copy_if_missing() {
+    local src="$1" dst="$2"
+    if [[ ! -f "$dst" ]]; then
+      cp "$src" "$dst"
+      echo "  ✅  $dst"
+    else
+      echo "  ⏭   $dst (exists, skipped)"
+    fi
+  }
+
+  copy_if_missing "$TEMPLATES/vault/core/goal.md"      "$TARGET/vault/core/goal.md"
+  copy_if_missing "$TEMPLATES/vault/core/rules.md"     "$TARGET/vault/core/rules.md"
+  copy_if_missing "$TEMPLATES/vault/core/routine.md"   "$TARGET/vault/core/routine.md"
+  copy_if_missing "$TEMPLATES/vault/active/summary.md" "$TARGET/vault/active/summary.md"
+  copy_if_missing "$TEMPLATES/vault/memories/log.md"   "$TARGET/vault/memories/log.md"
+
+  # ── .claude structure ────────────────────────────────────────────────────────
+  for dir in .claude/commands .claude/agents .claude/hooks .claude/logs; do
+    mkdir -p "$TARGET/$dir"
+  done
+
+  copy_if_missing "$TEMPLATES/claude/settings.json"              "$TARGET/.claude/settings.json"
+  copy_if_missing "$TEMPLATES/claude/.gitignore"                 "$TARGET/.claude/.gitignore"
+  copy_if_missing "$TEMPLATES/claude/commands/task.md"           "$TARGET/.claude/commands/task.md"
+  copy_if_missing "$TEMPLATES/claude/commands/done.md"           "$TARGET/.claude/commands/done.md"
+  copy_if_missing "$TEMPLATES/claude/commands/log.md"            "$TARGET/.claude/commands/log.md"
+  copy_if_missing "$TEMPLATES/claude/commands/review.md"         "$TARGET/.claude/commands/review.md"
+  copy_if_missing "$TEMPLATES/claude/agents/code-reviewer.md"    "$TARGET/.claude/agents/code-reviewer.md"
+  copy_if_missing "$TEMPLATES/claude/hooks/session-start.sh"     "$TARGET/.claude/hooks/session-start.sh"
+  copy_if_missing "$TEMPLATES/claude/hooks/session-stop.sh"      "$TARGET/.claude/hooks/session-stop.sh"
+  copy_if_missing "$TEMPLATES/claude/hooks/protect-files.sh"     "$TARGET/.claude/hooks/protect-files.sh"
+  copy_if_missing "$TEMPLATES/claude/hooks/verify-branch.sh"     "$TARGET/.claude/hooks/verify-branch.sh"
+
+  chmod +x "$TARGET/.claude/hooks/"*.sh
+
+  # ── root files ──────────────────────────────────────────────────────────────
+  copy_if_missing "$TEMPLATES/TODO.md" "$TARGET/TODO.md"
+
+  # CLAUDE.md always overwrites (it's the protocol, not user content)
+  cp "$CLAUDE_MD_SRC" "$TARGET/CLAUDE.md"
+  echo "  ✅  $TARGET/CLAUDE.md (always refreshed)"
+
+  # ── .gitignore additions ────────────────────────────────────────────────────
+  local GI="$TARGET/.gitignore"
+  if [[ ! -f "$GI" ]]; then touch "$GI"; fi
+  if ! grep -q ".claude/settings.local.json" "$GI"; then
+    printf '\n# Claude Code local settings\n.claude/settings.local.json\n' >> "$GI"
+    echo "  ✅  .gitignore updated"
+  fi
+
+  echo ""
+  echo "🎉  Done! Structure:"
+  echo "    $TARGET/"
+  echo "    ├── CLAUDE.md              ← agent rules & workflow (auto-refreshed)"
+  echo "    ├── TODO.md                ← shared task list"
+  echo "    ├── vault/"
+  echo "    │   ├── core/              ← EDIT: goal.md, rules.md, routine.md"
+  echo "    │   ├── active/summary.md  ← agent-maintained state"
+  echo "    │   └── memories/log.md    ← agent append-only notes"
+  echo "    └── .claude/"
+  echo "        ├── settings.json      ← hooks (branch guard, file protect)"
+  echo "        ├── commands/          ← /task  /done  /log  /review"
+  echo "        ├── agents/            ← code-reviewer persona"
+  echo "        ├── hooks/             ← session context, branch guard"
+  echo "        └── logs/              ← per-feature decision logs (Claude writes here)"
+  echo ""
+  echo "  Next steps:"
+  echo "  1. Edit vault/core/goal.md   — describe your project"
+  echo "  2. Edit vault/core/rules.md  — add your hard constraints"
+  echo "  3. Fill TODO.md              — add your first tasks"
+  echo "  4. Open Claude Code in VSCode and type /task"
+}
+
+cmd_clean() {
+  local VAULT="${1:-}"
+  if [[ -z "$VAULT" ]]; then echo "Usage: orcheas clean <vault-path>"; exit 1; fi
+  if [[ ! -d "$VAULT" ]]; then echo "❌  '$VAULT' not found."; exit 1; fi
+
+  VAULT="$(cd "$VAULT" && pwd)"
+  PROJECT_ROOT="$(dirname "$VAULT")"
+
+  echo "🧹  Cleaning mutable state in $VAULT and $PROJECT_ROOT/.claude/logs/"
+
+  # Reset vault/active/
+  cp "$TEMPLATES/vault/active/summary.md" "$VAULT/active/summary.md"
+  echo "  ✅  vault/active/summary.md reset"
+
+  # Reset vault/memories/
+  find "$VAULT/memories/" -name "*.md" -delete
+  cp "$TEMPLATES/vault/memories/log.md" "$VAULT/memories/log.md"
+  echo "  ✅  vault/memories/ reset"
+
+  # Reset .claude/logs/
+  if [[ -d "$PROJECT_ROOT/.claude/logs" ]]; then
+    find "$PROJECT_ROOT/.claude/logs/" -name "*.md" -delete
+    echo "  ✅  .claude/logs/ cleared"
+  fi
+
+  echo "  Core files untouched: vault/core/"
+  echo "  Task list untouched : TODO.md"
+}
+
+cmd_update() {
+  local SOURCE_FILE="$SELF_DIR/.source"
+  local SOURCE_DIR="${ORCHEAS_SOURCE:-}"
+
+  if [[ -z "$SOURCE_DIR" ]] && [[ -f "$SOURCE_FILE" ]]; then
+    SOURCE_DIR="$(cat "$SOURCE_FILE")"
+  fi
+
+  if [[ -z "$SOURCE_DIR" ]] || [[ ! -d "$SOURCE_DIR" ]]; then
+    echo "❌  Source repo not found. Run: ORCHEAS_SOURCE=/path/to/orcheas orcheas update"
+    exit 1
+  fi
+
+  echo "🔄  Updating from $SOURCE_DIR"
+  bash "$SOURCE_DIR/install.sh"
+}
+
+case "${1:-help}" in
+  init)    cmd_init   "${2:-}" ;;
+  clean)   cmd_clean  "${2:-}" ;;
+  update)  cmd_update ;;
+  help|--help|-h) usage ;;
+  *) echo "Unknown command: $1"; usage; exit 1 ;;
+esac

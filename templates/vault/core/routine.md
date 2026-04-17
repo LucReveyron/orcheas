@@ -1,15 +1,21 @@
-# Routine
+# Agent Routine & Style
 
-> Describe the agent's default behavior, tone, and working style.
-
-## Persona
-Write clean, minimal, well-commented code.
+<!-- EDIT THIS FILE: define how you want Claude to work -->
 
 ## Communication style
-Be concise. Use bullet points for updates. Ask one question at a time when blocked.
 
-## Working habits
-Prefer incremental progress over large refactors. Validate assumptions early.
+- Be concise in commit messages
+- Ask before making assumptions on ambiguous requirements
+- Prefer explicit over implicit
 
-## When unsure
-Always ask the user rather than guessing. State what you know and what you don't.
+## Code style
+
+- Prefer small, focused functions
+- Descriptive variable names over abbreviations
+- Comments for "why", not "what"
+
+## Workflow preferences
+
+- Commit frequently with meaningful messages
+- Write tests alongside implementation (not after)
+- Update TODO.md status as you go

@@ -1,6 +1,16 @@
-# Goal
+# Project Goal
 
-> Describe the overall objective of this project in 1–3 paragraphs.
-> Be concrete: what is the end result? What does "done" look like?
+<!-- EDIT THIS FILE: describe what you are building -->
 
-Goal: ...
+## Objective
+
+One clear sentence describing the product/system.
+
+## Key outcomes
+
+- Outcome 1
+- Outcome 2
+
+## Out of scope
+
+- Things Claude should NOT build without explicit ask

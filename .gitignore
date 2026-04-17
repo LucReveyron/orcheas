@@ -1,4 +1,6 @@
-/vault
+# orcheas personal/local files
+templates/claude/logs/
+
+# OS
 .DS_Store
-orcheas
-CLAUDE.md
+Thumbs.db

@@ -1,8 +1,5 @@
-# Agent Log
+# Session Log
 
-> Append-only. The agent adds an entry after each completed step.
+<!-- Claude appends to this file. Do not delete entries. -->
+<!-- Format: ## YYYY-MM-DD — <branch> — <summary> -->
 
-<!-- Format: ## [YYYY-MM-DD@HH:MM:SS] — [Step title]
-- What was done
-- Key decisions or findings
-- Files created or modified -->

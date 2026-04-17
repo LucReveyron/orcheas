@@ -1,11 +1,23 @@
-# Rules
+# Project Rules
 
-> Hard constraints the agent must always respect. These override any other instruction.
+<!-- EDIT THIS FILE: hard constraints Claude must always follow -->
 
-- Rule 1: All code must include unit tests before being marked done
-- Rule 2: Each dependency must be documented
-- Rule 3: Keep functions as small as possible
-- Rule 4: Keep code files short as possible
-- Rule 5: Each reference used must be logged
+## Tech stack
 
-[Add or remove rules as needed]
+- Language: <!-- e.g. TypeScript -->
+- Framework: <!-- e.g. Next.js -->
+- Database: <!-- e.g. PostgreSQL -->
+- Package manager: <!-- e.g. pnpm -->
+
+## Coding constraints
+
+- [ ] All public functions must have JSDoc/docstring
+- [ ] No `any` types (TypeScript)
+- [ ] All API routes require authentication unless explicitly noted
+- [ ] Add rule...
+
+## Forbidden actions
+
+- Never delete migration files
+- Never modify files in `src/generated/`
+- Add rule...
